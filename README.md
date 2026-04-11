@@ -260,7 +260,9 @@ The project is being built one module at a time. Each module requires a passing 
 | `api/` | FastAPI wrapper — serves the JSON contract over HTTP | not started |
 | `ui/` | Web UI — upload CSV, run, see dashboard (no terminal required) | not started |
 
-The static pipeline (`trainer.py`) is complete and tested. The agent loop is next. The two interface layers are built last — they are thin shells around the same engine.
+**Next: `core/executor.py` (Step 4c)** — sandboxed code execution + fallback guard. Written from scratch, fully isolated, imports nothing from kashif_core.
+
+The two interface layers (API, UI) are built last — they are thin shells around the same engine.
 
 ---
 
