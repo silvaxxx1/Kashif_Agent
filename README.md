@@ -2,7 +2,7 @@
 
 > *The Uncoverer*
 
-![Kashif Logo](assets/Kashif2.png)
+![Kashif Logo](assets/Kashif3.png)
 
 **GitHub:** [silvaxxx1/Kashif_Agent](https://github.com/silvaxxx1/Kashif_Agent)
 
