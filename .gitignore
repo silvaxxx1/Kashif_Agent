@@ -34,6 +34,15 @@ Thumbs.db
 
 
 # =============================================================================
+# PROJECT FILES — committed and shared
+# scripts/       smoke tests and dev utilities — always committed
+# core/          all pipeline modules — always committed
+# tests/         pytest test suite — always committed
+# cli/           CLI entry point — always committed
+# =============================================================================
+
+
+# =============================================================================
 # RUNTIME OUTPUTS — local run artifacts, not source code
 # The outputs/ directory is tracked (via .gitkeep) but its contents are not.
 # Model files, logs, and reports are generated per run — do not commit them.

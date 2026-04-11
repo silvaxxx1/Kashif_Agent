@@ -285,7 +285,10 @@ kashif_core/
 │   ├── test_executor.py
 │   ├── test_fe_agent.py
 │   └── test_reporter.py
-├── outputs/             model artifacts, reports, logs
+├── scripts/
+│   ├── smoke_classification.py   end-to-end test on breast cancer dataset
+│   └── smoke_regression.py      end-to-end test on California housing dataset
+├── outputs/             model artifacts, reports, logs (gitignored)
 ├── config.yaml          LLM provider, CV folds, cleaning thresholds
 ├── program.md           user domain hints (edit before running)
 └── pyproject.toml       uv manages this
