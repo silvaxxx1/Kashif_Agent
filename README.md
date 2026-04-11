@@ -2,19 +2,55 @@
 
 > *The Uncoverer*
 
+**GitHub:** [silvaxxx1/Kashif_Agent](https://github.com/silvaxxx1/Kashif_Agent)
+
 Kashif is a data science agent that wraps a robust static AutoML pipeline with an LLM-powered feature engineering loop. Give it a CSV and a target column. It figures out the rest.
 
 ---
 
-## The idea
+## Philosophy
 
-Most AutoML tools treat feature engineering as a hyperparameter search or a fixed set of transforms. Kashif treats it as a reasoning problem.
+### The old way still works
 
-A language model reads the data profile — column names, types, null rates, skew, target distribution — and writes Python feature engineering code. That code runs inside a sandboxed executor, the transformed DataFrame flows through a full sklearn pipeline, and cross-validation scores the result. The model reflects on what worked and what didn't. It tries again.
+Classical data science has a core that is not broken. A well-built sklearn pipeline with proper cross-validation, leak-free preprocessing, and a leaderboard of models is still how production tabular ML gets done. This is not legacy — it is engineering discipline. Most of what AutoML got right is in this pipeline.
 
-This is not prompt-and-hope. Every round, the LLM receives the full history: every previous attempt, every score, every dead feature. It accumulates context the way a data scientist would across a working session. When improvement drops below a threshold, it stops.
+Kashif does not replace it. It starts there.
 
-The static pipeline — cleaning, encoding, scaling, cross-validation — never changes. It is deterministic, leak-free, and borrowed from the best parts of three audited AutoML codebases. The LLM owns exactly one thing: writing and improving the `engineer_features(df) -> df` function.
+### The new part is reasoning, not automation
+
+Feature engineering is where the old way runs out. You cannot grid-search your way to a good interaction feature. You cannot rule-base your way to the right domain transformation. You need to look at the data, think about what it represents, and write code that encodes that understanding.
+
+That reasoning is exactly what language models are good at.
+
+Kashif gives the LLM the data profile — column names, types, distributions, null rates, target correlation — and asks it to write `engineer_features(df) -> df`. That code runs in a sandbox, the transformed DataFrame goes through the same static pipeline, and cross-validation gives an honest score. The LLM sees the result, sees what SHAP says was useful, and tries again.
+
+This is not prompt-and-hope. It is a loop with a memory, a score, and a stopping condition.
+
+### Inspired by Karpathy's autoresearch pattern
+
+The loop design is directly inspired by Andrej Karpathy's [autoresearch](https://github.com/karpathy/llm.c/tree/master/autoresearch) experiment — an autonomous agent that iteratively improves a training script by reading its own results and rewriting the code.
+
+The key insight from that work: **give the model everything, every time**. Not just the last result — the full history. Every previous attempt, every score, every failure. The model accumulates context the way a researcher would across a working session. The loop runs until improvement flattens.
+
+Kashif applies this pattern to tabular ML with one critical adaptation: the editable artifact is scoped to a single function. The LLM writes `engineer_features(df) -> df` and nothing else. The pipeline, the CV harness, the model — all static. The agent touches exactly one thing, and that thing is the one that requires reasoning.
+
+### The right boundary
+
+| Static — engineering discipline | LLM — reasoning required |
+|---|---|
+| Data cleaning | Feature engineering code |
+| Encoding and scaling | Reflection on what worked |
+| Cross-validation (no leakage) | Stopping decision |
+| Model selection and training | Report narrative |
+| Pickle output | Reading domain hints from `program.md` |
+
+The boundary is not arbitrary. Everything on the left has a correct answer that code can compute. Everything on the right requires understanding the data, the domain, and the history of what was tried.
+
+---
+
+## How it works
+
+The static pipeline — cleaning, encoding, scaling, cross-validation — never changes. It is deterministic and leak-free. The LLM owns exactly one thing: writing and improving `engineer_features(df) -> df`. Every round it receives the full history: every previous attempt, every score, every dead feature. When improvement drops below 0.5%, it stops.
 
 ---
 
