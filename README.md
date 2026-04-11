@@ -246,7 +246,7 @@ The project is being built one module at a time. Each module requires a passing 
 | Module | What it does | Status |
 |---|---|---|
 | `core/trainer.py` | Static sklearn pipeline: cleaning, encoding, CV, model registry | **complete** — 34/34 tests |
-| `core/profiler.py` | Data profiling + task detection → profile JSON | in progress |
+| `core/profiler.py` | Data profiling + task detection + EDA HTML report | **complete** — 34/34 tests |
 | `core/executor.py` | Sandboxed code execution + fallback guard | not started |
 | `core/llm/` | Provider-agnostic LLM adapter layer | not started |
 | `core/fe_agent.py` | LLM feature engineering loop + reflection | not started |
