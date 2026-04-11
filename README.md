@@ -2,6 +2,8 @@
 
 > *The Uncoverer*
 
+![Kashif Logo](assets/Kashif2.png)
+
 **GitHub:** [silvaxxx1/Kashif_Agent](https://github.com/silvaxxx1/Kashif_Agent)
 
 Kashif is a data science agent that wraps a robust static AutoML pipeline with an LLM-powered feature engineering loop. Give it a CSV and a target column. It figures out the rest.
