@@ -228,6 +228,25 @@ The static pipeline (`trainer.py`) is complete and tested. The agent loop is nex
 
 ---
 
+## Smoke tests — real datasets
+
+```bash
+# Classification: Breast Cancer Wisconsin (569 rows, 30 features)
+uv run python scripts/smoke_classification.py
+
+# Regression: California Housing (20,640 rows, 8 features)
+uv run python scripts/smoke_regression.py
+```
+
+Expected results (static pipeline, no LLM FE):
+
+| Dataset | Best model | Score |
+|---|---|---|
+| Breast Cancer | Logistic Regression | 97.4% accuracy |
+| California Housing | Random Forest | RMSE 0.50, R² 0.81 |
+
+---
+
 ## Running tests
 
 ```bash
