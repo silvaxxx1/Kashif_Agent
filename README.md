@@ -1,0 +1,273 @@
+# Kashif — كاشف
+
+> *The Uncoverer*
+
+Kashif is a data science agent that wraps a robust static AutoML pipeline with an LLM-powered feature engineering loop. Give it a CSV and a target column. It figures out the rest.
+
+---
+
+## The idea
+
+Most AutoML tools treat feature engineering as a hyperparameter search or a fixed set of transforms. Kashif treats it as a reasoning problem.
+
+A language model reads the data profile — column names, types, null rates, skew, target distribution — and writes Python feature engineering code. That code runs inside a sandboxed executor, the transformed DataFrame flows through a full sklearn pipeline, and cross-validation scores the result. The model reflects on what worked and what didn't. It tries again.
+
+This is not prompt-and-hope. Every round, the LLM receives the full history: every previous attempt, every score, every dead feature. It accumulates context the way a data scientist would across a working session. When improvement drops below a threshold, it stops.
+
+The static pipeline — cleaning, encoding, scaling, cross-validation — never changes. It is deterministic, leak-free, and borrowed from the best parts of three audited AutoML codebases. The LLM owns exactly one thing: writing and improving the `engineer_features(df) -> df` function.
+
+---
+
+## Two interfaces, one engine
+
+Kashif is built for two different users on top of the same core engine.
+
+**The CLI** is for data scientists and engineers. Full control — pick the LLM provider, set the number of rounds, disable the agent for a pure static run, inspect the JSON output, pipe it into other tools. Zero UI overhead.
+
+```bash
+kashif run --csv data.csv --target churn
+kashif run --csv data.csv --target price --rounds 4 --llm anthropic
+kashif run --csv data.csv --target survived --no-agent
+```
+
+**The UI** is for domain experts who should not need to touch a terminal. Upload a CSV, name the target column, edit `program.md` in a text box, hit run. The same JSON contract that feeds the CLI renders as a live dashboard: score progression, top features per round, downloadable model.
+
+The engine produces exactly one output format. It has no opinion about who called it. Both interfaces are thin shells around the same `train()` call.
+
+---
+
+## Architecture
+
+```
+  data.csv
+      │
+      ▼
+  profiler.py          ← dtype audit, null rates, cardinality, skew,
+      │                   task detection (classification vs regression)
+      │  profile_json
+      ▼
+  fe_agent.py          ← LLM reads profile + program.md + all previous rounds
+      │                   writes engineer_features(df) -> df
+      │  fe_code
+      ▼
+  executor.py          ← sandboxed exec, catches all errors, fallback to identity
+      │  transformed_df
+      ▼
+  trainer.py           ← Pipeline(cleaning → fe_transform → processing → model)
+      │                   CrossValidator clones full pipeline per fold — no leakage
+      │  cv_score, SHAP, oof_preds
+      ▼
+  fe_agent.py          ← reflection: score delta + SHAP + dead features → new code
+      │
+      · · · rounds until delta < 0.005 or max_rounds reached
+      │
+      ▼
+  reporter.py          ← score progression, top features, final recommendation
+      │  report.md
+      ▼
+  JSON output contract
+```
+
+The loop runs inside the agent. The pipeline runs inside sklearn. Neither knows about the other except through the DataFrame they pass between them.
+
+---
+
+## What the LLM owns vs what the code owns
+
+| Static — deterministic | LLM-owned — reasoning required |
+|---|---|
+| Data loading | Feature engineering code |
+| Type detection | Reflection on what worked |
+| Null/variance/cardinality cleaning | Stopping decision |
+| Encoding and scaling | Report narrative |
+| Cross-validation | Reading `program.md` domain hints |
+| Pickle output | Deciding what to drop vs keep |
+
+---
+
+## Provider-agnostic LLM layer
+
+The agent never imports a provider SDK directly. `fe_agent.py` holds a `BaseLLM` reference only. The concrete provider is resolved at startup from `config.yaml`.
+
+```yaml
+llm:
+  provider: groq                    # groq | anthropic | ollama
+  model: llama-3.3-70b-versatile
+  api_key_env: GROQ_API_KEY
+  temperature: 0.2
+```
+
+Groq is the default — fastest inference, OpenAI-compatible API, cheapest per token at scale. Swap to Anthropic or a local Ollama model with one config line.
+
+---
+
+## Output contract
+
+Every run — CLI, API, or direct Python — returns the same structure:
+
+```json
+{
+  "status": "complete",
+  "best_round": 3,
+  "cv_score": 0.891,
+  "baseline_score": 0.821,
+  "delta": 0.070,
+  "model_path": "./outputs/best_model.pkl",
+  "feature_schema": "./outputs/feature_schema.json",
+  "top_features": ["age_x_salary", "dept_encoded"],
+  "dead_features": ["col_x", "col_y"],
+  "rounds": [
+    {"round": 1, "cv_score": 0.841, "fe_code": "..."},
+    {"round": 2, "cv_score": 0.871, "fe_code": "..."},
+    {"round": 3, "cv_score": 0.891, "fe_code": "..."}
+  ],
+  "report_path": "./outputs/report.md"
+}
+```
+
+The CLI prints it formatted. A future API returns it as JSON. A future UI renders it as a dashboard. The engine never knows or cares who called it.
+
+---
+
+## Usage
+
+```bash
+# Install
+cd kashif_core
+uv add scikit-learn pandas numpy shap typer openai anthropic pytest
+
+# Run (static pipeline only, no agent)
+uv run python -m cli.main run --csv data.csv --target survived --no-agent
+
+# Run with LLM feature engineering loop (default: Groq)
+uv run python -m cli.main run --csv data.csv --target survived
+
+# Override provider
+uv run python -m cli.main run --csv data.csv --target price --llm anthropic
+
+# Control rounds
+uv run python -m cli.main run --csv data.csv --target churn --rounds 4
+```
+
+Environment variables required:
+
+```bash
+export GROQ_API_KEY=...          # default provider
+export ANTHROPIC_API_KEY=...     # if provider: anthropic
+```
+
+---
+
+## Domain hints — program.md
+
+`program.md` is the user's interface to the LLM. It is not code and not loop mechanics — it is domain knowledge that travels into every LLM prompt:
+
+```markdown
+## Goal
+Predict customer churn. Target is binary: 1 = churned within 30 days.
+
+## Column notes
+- `tenure_months`: time as customer — high signal, use as-is and in ratios
+- `last_login_days`: days since last activity — engineer decay features
+- `plan_id`: nominal, no ordinal meaning — do not treat as numeric
+
+## Avoid
+- `customer_id` — identifier, no signal
+- `signup_date` — already encoded as tenure_months
+
+## Evaluation priority
+Recall matters more than precision here. Missing a churn is costlier than a false alarm.
+```
+
+Edit `kashif_core/program.md` before running. Leave it blank and the agent works from column statistics alone.
+
+---
+
+## Tech stack
+
+| Layer | Tool |
+|---|---|
+| Environment | uv |
+| ML pipeline | scikit-learn |
+| Data | pandas, numpy |
+| Explainability | shap |
+| CLI | typer |
+| LLM default | Groq — openai SDK + Groq base URL |
+| LLM secondary | Anthropic SDK |
+| LLM future | Ollama (local inference) |
+| Testing | pytest |
+| API (planned) | fastapi + uvicorn |
+| UI (planned) | TBD |
+
+---
+
+## Build status
+
+The project is being built one module at a time. Each module requires a passing test suite before the next one starts.
+
+**Layer 1 — Core engine**
+
+| Module | What it does | Status |
+|---|---|---|
+| `core/trainer.py` | Static sklearn pipeline: cleaning, encoding, CV, model registry | **complete** — 34/34 tests |
+| `core/profiler.py` | Data profiling + task detection → profile JSON | in progress |
+| `core/executor.py` | Sandboxed code execution + fallback guard | not started |
+| `core/llm/` | Provider-agnostic LLM adapter layer | not started |
+| `core/fe_agent.py` | LLM feature engineering loop + reflection | not started |
+| `core/reporter.py` | Markdown report from experiment log | not started |
+
+**Layer 2 — Interfaces**
+
+| Interface | What it does | Status |
+|---|---|---|
+| `cli/main.py` | Typer CLI — full control for data scientists | not started |
+| `api/` | FastAPI wrapper — serves the JSON contract over HTTP | not started |
+| `ui/` | Web UI — upload CSV, run, see dashboard (no terminal required) | not started |
+
+The static pipeline (`trainer.py`) is complete and tested. The agent loop is next. The two interface layers are built last — they are thin shells around the same engine.
+
+---
+
+## Running tests
+
+```bash
+# All tests
+uv run pytest tests/ -v
+
+# Single module
+uv run pytest tests/test_trainer.py -v
+
+# Single test
+uv run pytest tests/test_trainer.py::TestTrain::test_classification_end_to_end -v
+```
+
+---
+
+## Project structure
+
+```
+kashif_core/
+├── core/
+│   ├── trainer.py       static pipeline — cleaning, CV, model registry
+│   ├── profiler.py      data profiling + task detection
+│   ├── executor.py      sandboxed code execution
+│   ├── fe_agent.py      LLM feature engineering loop
+│   ├── reporter.py      markdown report generator
+│   └── llm/
+│       ├── base.py      abstract BaseLLM interface
+│       ├── groq.py      Groq adapter (default)
+│       ├── anthropic.py Anthropic adapter
+│       └── ollama.py    local model adapter
+├── cli/
+│   └── main.py          typer CLI entry point
+├── tests/
+│   ├── test_trainer.py
+│   ├── test_profiler.py
+│   ├── test_executor.py
+│   ├── test_fe_agent.py
+│   └── test_reporter.py
+├── outputs/             model artifacts, reports, logs
+├── config.yaml          LLM provider, CV folds, cleaning thresholds
+├── program.md           user domain hints (edit before running)
+└── pyproject.toml       uv manages this
+```

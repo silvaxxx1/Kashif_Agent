@@ -1,0 +1,23 @@
+[project]
+name = "kashif-core"
+version = "0.1.0"
+description = "Data science agent: static AutoML pipeline + LLM feature engineering loop"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.94.0",
+    "joblib>=1.5.3",
+    "lightgbm>=4.6.0",
+    "numpy>=2.4.4",
+    "openai>=2.31.0",
+    "pandas>=3.0.2",
+    "pytest>=9.0.3",
+    "scikit-learn>=1.8.0",
+    "shap>=0.51.0",
+    "typer>=0.24.1",
+    "xgboost>=3.2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
