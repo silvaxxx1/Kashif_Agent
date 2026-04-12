@@ -262,7 +262,7 @@ The project is being built one module at a time. Each module requires a passing 
 | `api/` | FastAPI wrapper — serves the JSON contract over HTTP | not started |
 | `ui/` | Web UI — upload CSV, run, see dashboard (no terminal required) | not started |
 
-**252/252 tests passing. Step 4 complete.** — markdown report from experiment log. Then `cli/main.py` (Step 4g) wires everything together.
+**252/252 tests passing. Step 4 complete.**
 
 The two interface layers (API, UI) are built last — they are thin shells around the same engine.
 
