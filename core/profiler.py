@@ -198,7 +198,7 @@ def _target_stats(series: pd.Series, task_type: str) -> Dict[str, Any]:
         dist = series.value_counts().to_dict()
         dist = {str(k): int(v) for k, v in dist.items()}
         counts = list(dist.values())
-        imbalance_ratio = round(max(counts) / min(counts), 4) if min(counts) > 0 else None
+        imbalance_ratio = round(max(counts) / min(counts), 4) if counts and min(counts) > 0 else None
         stats["distribution"] = dist
         stats["imbalance_ratio"] = imbalance_ratio
         stats["is_imbalanced"] = imbalance_ratio is not None and imbalance_ratio > 3.0
@@ -208,6 +208,7 @@ def _target_stats(series: pd.Series, task_type: str) -> Dict[str, Any]:
         stats["min"] = round(float(series.min()), 4)
         stats["max"] = round(float(series.max()), 4)
         stats["skew"] = round(float(series.skew()), 4)
+        stats["is_imbalanced"] = False   # not applicable for regression
     return stats
 
 

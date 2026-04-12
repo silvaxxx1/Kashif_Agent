@@ -495,3 +495,64 @@ class TestTrain:
             compute_shap=False,
         )
         assert result.status == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Audit fixes — new tests for previously uncovered edge cases
+# ---------------------------------------------------------------------------
+
+from sklearn.base import BaseEstimator, TransformerMixin
+
+
+class TestTrainerAuditFixes:
+    def test_all_models_fail_returns_failed_status(self):
+        """Issue #2: when every model raises, status must be 'failed' not 'complete'."""
+        df = make_classification_df(30)
+        bad_config = {
+            "cleaning":        FAST_CONFIG["cleaning"],
+            "model_selection": {"models": {"classification": ["Nonexistent Model XYZ"]}},
+            "settings":        FAST_CONFIG["settings"],
+        }
+        result = train(df, "target", task_type="classification",
+                       config=bad_config, save_model=False, compute_shap=False)
+        assert result.status == "failed"
+        assert result.cv_loss == float("inf")
+        assert result.best_model_name == ""
+
+    def test_small_regression_dataset_cv_does_not_crash(self):
+        """Issue #8: regression CV binning must not crash on tiny datasets."""
+        df = make_regression_df(n=12)
+        result = train(df, "target", task_type="regression",
+                       config=FAST_CONFIG, save_model=False, compute_shap=False)
+        assert result.status == "complete"
+
+    def test_get_model_info_invalid_task_type_raises(self):
+        """Issue #9: get_model_info must raise on unknown task_type."""
+        reg = ModelRegistry()
+        with pytest.raises(ValueError, match="Unknown task type"):
+            reg.get_model_info("Random Forest", "time_travel")
+
+    def test_numeric_only_pipeline(self):
+        """Issue #11: pipeline with no categorical columns must not crash."""
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({
+            "a": rng.normal(size=60),
+            "b": rng.normal(size=60),
+            "c": rng.normal(size=60),
+            "target": rng.choice(["yes", "no"], size=60),
+        })
+        result = train(df, "target", task_type="classification",
+                       config=FAST_CONFIG, save_model=False, compute_shap=False)
+        assert result.status == "complete"
+
+    def test_categorical_only_pipeline(self):
+        """Issue #11: pipeline with only categorical columns must not crash."""
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({
+            "color": rng.choice(["red", "blue", "green"], size=60),
+            "size":  rng.choice(["small", "medium", "large"], size=60),
+            "target": rng.choice(["yes", "no"], size=60),
+        })
+        result = train(df, "target", task_type="classification",
+                       config=FAST_CONFIG, save_model=False, compute_shap=False)
+        assert result.status == "complete"

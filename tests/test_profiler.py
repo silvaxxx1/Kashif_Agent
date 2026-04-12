@@ -279,3 +279,34 @@ class TestRun:
         df = make_regression_df()
         prof, _ = run(df, "target", output_dir=str(tmp_path), save_eda=False)
         assert prof["task_type"] == "regression"
+
+
+# ---------------------------------------------------------------------------
+# Audit fixes — new tests for previously uncovered edge cases
+# ---------------------------------------------------------------------------
+
+class TestProfilerAuditFixes:
+    def test_regression_target_has_is_imbalanced_key(self):
+        """Issue #12: regression profiles must include is_imbalanced key."""
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame({
+            "x": rng.normal(size=50),
+            "target": rng.normal(size=50),
+        })
+        from core.profiler import profile
+        prof = profile(df, "target")
+        assert "is_imbalanced" in prof["target"], \
+            "Regression target profile missing is_imbalanced key"
+        assert prof["target"]["is_imbalanced"] is False
+
+    def test_all_null_target_does_not_crash(self):
+        """Issue #4: all-null target must return classification with 0.5 confidence."""
+        from core.profiler import profile
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0],
+            "target": [None, None, None],
+        })
+        prof = profile(df, "target")
+        assert prof["task_type"] == "classification"
+        assert prof["target"]["null_count"] == 3
+        assert prof["target"]["null_rate"] == 1.0

@@ -496,7 +496,12 @@ class ModelRegistry:
         return info.model_class(**params)
 
     def get_model_info(self, model_name: str, task_type: str) -> ModelInfo:
-        registry = self._classification if task_type == "classification" else self._regression
+        if task_type == "classification":
+            registry = self._classification
+        elif task_type == "regression":
+            registry = self._regression
+        else:
+            raise ValueError(f"Unknown task type: {task_type!r}")
         if model_name not in registry:
             raise ValueError(f"Model {model_name!r} not found for {task_type}")
         return registry[model_name]
@@ -559,7 +564,14 @@ class CrossValidator:
         # Regression: bin target for stratification
         if task_type == "regression":
             n_bins = min(10, len(y) // self.n_splits)
-            target_split = pd.qcut(y, q=max(2, n_bins), labels=False, duplicates="drop")
+            try:
+                target_split = pd.qcut(y, q=max(2, n_bins), labels=False, duplicates="drop")
+                # qcut can collapse to 1 unique bin on small/degenerate data
+                if target_split.nunique() < 2:
+                    target_split = pd.cut(y, bins=2, labels=False)
+            except Exception:
+                # Final fallback: use index parity for stratification
+                target_split = pd.Series(range(len(y)), index=y.index) % 2
         else:
             target_split = y
 
@@ -797,6 +809,19 @@ def train(
             logger.warning("trainer: skipped %s — %s", slug, exc)
 
     leaderboard.sort(key=lambda r: r["cv_loss_mean"])
+
+    # All models failed — return explicit failure status so fe_agent can detect it
+    if best_pipeline is None:
+        logger.error("trainer: all models failed — leaderboard is empty")
+        return TrainResult(
+            status="failed",
+            best_model_name="",
+            cv_score=0.0,
+            cv_loss=float("inf"),
+            model_path=None,
+            leaderboard=leaderboard,
+            task_type=task_type,
+        )
 
     # Primary metric score from leaderboard entry
     best_entry = next((r for r in leaderboard if r["model"] == best_model_name), {})

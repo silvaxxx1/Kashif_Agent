@@ -1,0 +1,35 @@
+# Kashif configuration
+# Edit this file to switch LLM providers, tune CV, or adjust cleaning thresholds.
+
+llm:
+  provider: groq                      # groq | anthropic | ollama
+  model: llama-3.3-70b-versatile      # model ID for the chosen provider
+  api_key_env: GROQ_API_KEY           # env var name — NOT the key itself
+  temperature: 0.2
+  max_tokens: 4096
+
+fe_agent:
+  max_rounds: 10
+  delta_threshold: 0.005              # stop if CV improvement < 0.5%
+
+training:
+  cv_folds: 5
+  random_state: 42
+  models:
+    classification:
+      - Random Forest
+      - Logistic Regression
+      - Decision Tree
+    regression:
+      - Random Forest
+      - Ridge
+      - Decision Tree
+
+cleaning:
+  cardinality:
+    max_unique_share: 0.9
+  variance:
+    min_threshold: 0.0
+  nan_thresholds:
+    numeric: 0.5
+    categorical: 0.5

@@ -249,9 +249,9 @@ The project is being built one module at a time. Each module requires a passing 
 |---|---|---|
 | `core/trainer.py` | Static sklearn pipeline: cleaning, encoding, CV, model registry | **complete** — 34/34 tests |
 | `core/profiler.py` | Data profiling + task detection + EDA HTML report | **complete** — 34/34 tests |
-| `core/executor.py` | Sandboxed code execution + fallback guard | not started |
-| `core/llm/` | Provider-agnostic LLM adapter layer | not started |
-| `core/fe_agent.py` | LLM feature engineering loop + reflection | not started |
+| `core/executor.py` | Sandboxed code execution + fallback guard | **complete** — 38/38 tests |
+| `core/llm/` | Provider-agnostic LLM adapter layer (Groq + Anthropic) | **complete** — 29/29 tests |
+| `core/fe_agent.py` | LLM feature engineering loop + reflection | **complete** — 36/36 tests |
 | `core/reporter.py` | Markdown report from experiment log | not started |
 
 **Layer 2 — Interfaces**
@@ -262,7 +262,9 @@ The project is being built one module at a time. Each module requires a passing 
 | `api/` | FastAPI wrapper — serves the JSON contract over HTTP | not started |
 | `ui/` | Web UI — upload CSV, run, see dashboard (no terminal required) | not started |
 
-**Next: `core/executor.py` (Step 4c)** — sandboxed code execution + fallback guard. Written from scratch, fully isolated, imports nothing from kashif_core.
+**185/185 tests passing across all complete modules.**
+
+**Next: `core/reporter.py` (Step 4f)** — markdown report from experiment log. Then `cli/main.py` (Step 4g) wires everything together.
 
 The two interface layers (API, UI) are built last — they are thin shells around the same engine.
 
@@ -276,14 +278,18 @@ uv run python scripts/smoke_classification.py
 
 # Regression: California Housing (20,640 rows, 8 features)
 uv run python scripts/smoke_regression.py
+
+# Integration: Titanic (891 rows) — static pipeline + LLM FE loop via Groq
+uv run python scripts/smoke_integration.py
 ```
 
-Expected results (static pipeline, no LLM FE):
+Results:
 
-| Dataset | Best model | Score |
-|---|---|---|
-| Breast Cancer | Logistic Regression | 97.4% accuracy |
-| California Housing | Random Forest | RMSE 0.50, R² 0.81 |
+| Dataset | Mode | Best model | Score |
+|---|---|---|---|
+| Breast Cancer | static | Logistic Regression | 97.4% accuracy |
+| California Housing | static | Random Forest | RMSE 0.50, R² 0.81 |
+| Titanic | LLM FE (Groq) | Random Forest | 77.2% accuracy (+6.9% over baseline) |
 
 ---
 
@@ -320,14 +326,16 @@ kashif_core/
 ├── cli/
 │   └── main.py          typer CLI entry point
 ├── tests/
-│   ├── test_trainer.py
-│   ├── test_profiler.py
-│   ├── test_executor.py
-│   ├── test_fe_agent.py
-│   └── test_reporter.py
+│   ├── test_trainer.py       34 tests — static pipeline
+│   ├── test_profiler.py      34 tests — profiling + task detection
+│   ├── test_executor.py      38 tests — sandboxed executor
+│   ├── test_llm.py           29 tests — LLM adapters
+│   ├── test_fe_agent.py      36 tests — FE agent loop
+│   └── test_reporter.py      (Step 4f — not started)
 ├── scripts/
 │   ├── smoke_classification.py   end-to-end test on breast cancer dataset
-│   └── smoke_regression.py      end-to-end test on California housing dataset
+│   ├── smoke_regression.py       end-to-end test on California housing dataset
+│   └── smoke_integration.py      full LLM loop test on Titanic dataset
 ├── outputs/             model artifacts, reports, logs (gitignored)
 ├── config.yaml          LLM provider, CV folds, cleaning thresholds
 ├── program.md           user domain hints (edit before running)
