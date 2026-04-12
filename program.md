@@ -6,19 +6,32 @@ Edit this file to steer the agent without touching code.
 ---
 
 ## Goal
-Maximize predictive performance on the target column.
-Default metric: F1 (classification) / RMSE (regression)
+Predict Titanic passenger survival (binary classification: survived=1, died=0).
 
 ## Constraints
-- Do not use columns: []          ← add forbidden columns here
-- Do not touch target column: ~   ← auto-filled at runtime
+- Do not touch target column: survived
 - Max rounds: 4
 - Min improvement per round: 0.005
 
 ## Domain hints
-← describe what you know about this dataset here
-← example: "This is customer churn data. Tenure and monthly charges are likely strong signals."
-← leave blank if unknown — the agent will profile the data itself
+This is the Titanic survival dataset. Key domain knowledge:
+- pclass: ticket class (1=first, 2=second, 3=third) — strong signal, women/children in 1st class prioritised
+- sex: female survival rate was much higher (women and children first)
+- age: children were prioritised; young adults had lower survival
+- sibsp: number of siblings/spouses aboard
+- parch: number of parents/children aboard
+- fare: correlated with pclass and cabin location
+- embarked: port of embarkation (S=Southampton, C=Cherbourg, Q=Queenstown)
+
+## Suggested features to engineer
+- family_size = sibsp + parch + 1
+- is_alone = 1 if family_size == 1 else 0
+- fare_per_person = fare / family_size
+- title = extracted from name (if available) — not available here
+- age groups (child < 12, adult, senior)
+- pclass * fare interaction
+- sex encoded as binary (female=1)
+- age * pclass interaction
 
 ## Stopping criteria
 Stop early if:

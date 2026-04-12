@@ -252,19 +252,17 @@ The project is being built one module at a time. Each module requires a passing 
 | `core/executor.py` | Sandboxed code execution + fallback guard | **complete** — 38/38 tests |
 | `core/llm/` | Provider-agnostic LLM adapter layer (Groq + Anthropic) | **complete** — 29/29 tests |
 | `core/fe_agent.py` | LLM feature engineering loop + reflection | **complete** — 36/36 tests |
-| `core/reporter.py` | Markdown report from experiment log | not started |
+| `core/reporter.py` | Markdown report from experiment log | **complete** — 42/42 tests |
 
 **Layer 2 — Interfaces**
 
 | Interface | What it does | Status |
 |---|---|---|
-| `cli/main.py` | Typer CLI — full control for data scientists | not started |
+| `cli/main.py` | Typer CLI — full control for data scientists | **complete** — 25/25 tests |
 | `api/` | FastAPI wrapper — serves the JSON contract over HTTP | not started |
 | `ui/` | Web UI — upload CSV, run, see dashboard (no terminal required) | not started |
 
-**185/185 tests passing across all complete modules.**
-
-**Next: `core/reporter.py` (Step 4f)** — markdown report from experiment log. Then `cli/main.py` (Step 4g) wires everything together.
+**252/252 tests passing. Step 4 complete.** — markdown report from experiment log. Then `cli/main.py` (Step 4g) wires everything together.
 
 The two interface layers (API, UI) are built last — they are thin shells around the same engine.
 
@@ -331,7 +329,7 @@ kashif_core/
 │   ├── test_executor.py      38 tests — sandboxed executor
 │   ├── test_llm.py           29 tests — LLM adapters
 │   ├── test_fe_agent.py      36 tests — FE agent loop
-│   └── test_reporter.py      (Step 4f — not started)
+│   └── test_reporter.py      42 tests — markdown reporter
 ├── scripts/
 │   ├── smoke_classification.py   end-to-end test on breast cancer dataset
 │   ├── smoke_regression.py       end-to-end test on California housing dataset

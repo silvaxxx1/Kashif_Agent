@@ -588,6 +588,15 @@ class CrossValidator:
             scores.append(score)
             logger.debug("   fold %d loss: %.4f", fold + 1, score)
 
+        # Cast oof_preds from object array to proper dtype so sklearn metrics
+        # (f1_score, accuracy_score) can infer the correct target type.
+        # Object arrays with int values are seen as "unknown" by type_of_target().
+        if oof_preds.dtype == object:
+            try:
+                oof_preds = np.array(list(oof_preds), dtype=y.dtype)
+            except (ValueError, TypeError):
+                pass  # keep as object if y.dtype is not compatible
+
         return {
             "mean_loss": float(np.mean(scores)),
             "std_loss": float(np.std(scores)),
