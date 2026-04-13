@@ -58,6 +58,28 @@ class BaseLLM(ABC):
             On any provider-side failure (auth, rate limit, timeout, etc.).
         """
 
+    def complete_with_system(self, system: str, user: str) -> str:
+        """
+        Send a system + user message pair and return the response text.
+
+        Providers that support a dedicated system role (Groq, Anthropic) override
+        this to use it properly. The default implementation concatenates them so
+        adapters that haven't overridden it still work.
+
+        Parameters
+        ----------
+        system : str
+            System-role content — rules, constraints, output format.
+        user : str
+            User-role content — data, history, task.
+
+        Raises
+        ------
+        LLMError
+            On any provider-side failure.
+        """
+        return self.complete(f"{system}\n\n{user}")
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("

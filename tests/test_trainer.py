@@ -556,3 +556,60 @@ class TestTrainerAuditFixes:
         result = train(df, "target", task_type="classification",
                        config=FAST_CONFIG, save_model=False, compute_shap=False)
         assert result.status == "complete"
+
+    def test_shap_dict_populated(self):
+        """compute_shap=True must populate shap_dict with feature importance values."""
+        df = make_classification_df(120)
+        result = train(
+            df,
+            target_col="target",
+            task_type="classification",
+            config=FAST_CONFIG,
+            save_model=False,
+            compute_shap=True,
+        )
+        assert result.status == "complete"
+        assert isinstance(result.shap_dict, dict)
+        assert len(result.shap_dict) > 0
+
+    def test_shap_dict_keys_are_strings(self):
+        """All keys in shap_dict must be strings (feature names after OHE expansion)."""
+        df = make_classification_df(120)
+        result = train(
+            df,
+            target_col="target",
+            task_type="classification",
+            config=FAST_CONFIG,
+            save_model=False,
+            compute_shap=True,
+        )
+        assert result.status == "complete"
+        for key in result.shap_dict:
+            assert isinstance(key, str), f"shap_dict key {key!r} is not a string"
+
+    def test_shap_dict_values_are_non_negative(self):
+        """SHAP values are mean absolute importances — must be >= 0."""
+        df = make_classification_df(120)
+        result = train(
+            df,
+            target_col="target",
+            task_type="classification",
+            config=FAST_CONFIG,
+            save_model=False,
+            compute_shap=True,
+        )
+        for name, val in result.shap_dict.items():
+            assert val >= 0.0, f"shap_dict[{name!r}] = {val} is negative"
+
+    def test_shap_dict_empty_when_compute_shap_false(self):
+        """compute_shap=False must leave shap_dict empty."""
+        df = make_classification_df(120)
+        result = train(
+            df,
+            target_col="target",
+            task_type="classification",
+            config=FAST_CONFIG,
+            save_model=False,
+            compute_shap=False,
+        )
+        assert result.shap_dict == {}

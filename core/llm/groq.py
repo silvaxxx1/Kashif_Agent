@@ -71,11 +71,22 @@ class GroqLLM(BaseLLM):
 
     def complete(self, prompt: str) -> str:
         """Send *prompt* to Groq and return the response text."""
+        return self._chat([{"role": "user", "content": prompt}])
+
+    def complete_with_system(self, system: str, user: str) -> str:
+        """Send a system + user message pair — uses Groq's native system role."""
+        return self._chat([
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ])
+
+    def _chat(self, messages: list) -> str:
+        """Internal: call the Groq chat completions endpoint."""
         client = self._get_client()
         try:
             response = client.chat.completions.create(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )

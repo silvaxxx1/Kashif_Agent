@@ -703,6 +703,8 @@ class TrainResult:
     # Fields populated by fe_agent (Step 4e) — empty for static baseline
     baseline_score: float = field(default=0.0)
     delta: float = field(default=0.0)
+    # SHAP feature importance — populated when compute_shap=True
+    shap_dict: Dict[str, float] = field(default_factory=dict)
 
 
 def _detect_task_type(y: pd.Series, threshold: int = 15) -> str:
@@ -844,6 +846,61 @@ def train(
         joblib.dump(best_pipeline, model_path)
         logger.info("trainer: best model saved → %s", model_path)
 
+    # SHAP feature importance — subsampled to ≤300 rows for speed
+    shap_dict: Dict[str, float] = {}
+    if compute_shap and best_pipeline is not None:
+        try:
+            import shap as _shap
+
+            rng = np.random.RandomState(cfg["settings"]["random_state"])
+            sample_idx = rng.choice(len(X), min(300, len(X)), replace=False)
+            X_sample = X.iloc[sample_idx]
+
+            # Transform through all steps except the final model wrapper
+            X_transformed = best_pipeline[:-1].transform(X_sample)
+
+            # Feature names from the processed DataFrame
+            if hasattr(X_transformed, "columns"):
+                feature_names = list(X_transformed.columns)
+            else:
+                feature_names = [f"f{i}" for i in range(X_transformed.shape[1])]
+
+            # Unwrap TargetEncodedModelWrapper to get the inner sklearn model
+            model_step = best_pipeline[-1]
+            inner_model = model_step.model_
+
+            # TreeExplainer for tree-based models, LinearExplainer for linear
+            sv = None
+            try:
+                explainer = _shap.TreeExplainer(inner_model)
+                sv = explainer.shap_values(X_transformed)
+            except Exception:
+                try:
+                    explainer = _shap.LinearExplainer(inner_model, X_transformed)
+                    sv = explainer.shap_values(X_transformed)
+                except Exception:
+                    pass  # SHAP unavailable for this model type — skip silently
+
+            if sv is not None:
+                sv_arr = np.abs(np.array(sv) if isinstance(sv, list) else np.asarray(sv))
+                # Normalize to (n_samples, n_features) regardless of SHAP version:
+                #   Old SHAP list → (n_classes, n_samples, n_features): mean over axis 0
+                #   New SHAP 3D  → (n_samples, n_features, n_classes): mean over axis -1
+                if sv_arr.ndim == 3:
+                    if isinstance(sv, list):
+                        sv_arr = sv_arr.mean(axis=0)   # (n_samples, n_features)
+                    else:
+                        sv_arr = sv_arr.mean(axis=-1)  # (n_samples, n_features)
+
+                mean_abs = sv_arr.mean(axis=0)  # (n_features,)
+                shap_dict = {
+                    str(name): float(val)
+                    for name, val in zip(feature_names, mean_abs)
+                }
+                logger.info("trainer: SHAP computed — %d features", len(shap_dict))
+        except Exception as exc:
+            logger.warning("trainer: SHAP computation failed: %s", exc)
+
     return TrainResult(
         status="complete",
         best_model_name=best_model_name,
@@ -852,4 +909,5 @@ def train(
         model_path=model_path,
         leaderboard=leaderboard,
         task_type=task_type,
+        shap_dict=shap_dict,
     )

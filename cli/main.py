@@ -93,6 +93,14 @@ def _resolve_llm(provider: str, cfg: dict):
 # Output contract builder
 # ---------------------------------------------------------------------------
 
+def _sanitize(value):
+    """Replace float nan/inf with None so json.dumps produces valid JSON."""
+    import math
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    return value
+
+
 def _build_output(
     log,
     profile_json: dict,
@@ -123,8 +131,8 @@ def _build_output(
             continue
         rounds_list.append({
             "round": r.round_num,
-            "cv_score": round(r.cv_score, 4),
-            "delta": round(r.delta, 4),
+            "cv_score": _sanitize(round(r.cv_score, 4)),
+            "delta": _sanitize(round(r.delta, 4)),
             "improved": r.improved,
             "fe_code": r.fe_code or "",
             "top_features": r.shap_top[:5],
@@ -134,9 +142,9 @@ def _build_output(
     return {
         "status": "complete" if best_round_num > 0 or baseline_score > 0 else "failed",
         "best_round": best_round_num,
-        "cv_score": round(best_score, 4),
-        "baseline_score": round(baseline_score, 4),
-        "delta": round(delta, 4),
+        "cv_score": _sanitize(round(best_score, 4)),
+        "baseline_score": _sanitize(round(baseline_score, 4)),
+        "delta": _sanitize(round(delta, 4)),
         "model_path": model_path,
         "top_features": top_features,
         "dead_features": dead_features,
@@ -278,8 +286,27 @@ def run(
     if report_path:
         typer.echo(f"[kashif] Report: {report_path}", err=True)
 
+    # Narration (skip if --no-agent and no LLM instance available)
+    narration = None
+    if not no_agent:
+        typer.echo("[kashif] Generating plain-English summary ...", err=True)
+        try:
+            from core.narrator import narrate
+            narration_result = narrate(log, profile_json, llm_instance)
+            narration = {
+                "executive_summary": narration_result.executive_summary,
+                "accuracy_statement": narration_result.accuracy_statement,
+                "key_factors": narration_result.key_factors,
+                "what_improved": narration_result.what_improved,
+                "next_steps": narration_result.next_steps,
+            }
+        except Exception as e:
+            typer.echo(f"[kashif] Narration skipped: {e}", err=True)
+
     # Build and print JSON output
     output = _build_output(log, profile_json, report_path, output_dir)
+    if narration:
+        output["narration"] = narration
     typer.echo(json.dumps(output, indent=2))
 
 

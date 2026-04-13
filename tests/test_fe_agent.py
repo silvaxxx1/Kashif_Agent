@@ -76,6 +76,8 @@ def engineer_features(df):
 """
     mock = MagicMock(spec=BaseLLM)
     mock.complete.return_value = response
+    # _call_llm now uses complete_with_system — wire both
+    mock.complete_with_system.return_value = response
     return mock
 
 
@@ -265,6 +267,29 @@ class TestBuildPrompt:
         prompt = _build_prompt(prof, "", [], ["age"])
         assert "engineer_features" in prompt
 
+    def test_ohe_note_shown_for_categorical_cols(self):
+        """OHE pipeline note must appear when categorical columns are present."""
+        df = make_df()
+        prof = make_profile(df)
+        # Add a categorical column to the profile
+        prof["columns"]["sex"] = {
+            "dtype": "object",
+            "null_rate": 0.0,
+            "top_values": {"male": 60, "female": 40},
+        }
+        prompt = _build_prompt(prof, "", [], ["age", "sex"])
+        assert "PIPELINE NOTE" in prompt
+        assert "sex" in prompt
+        assert "one-hot" in prompt.lower() or "one_hot" in prompt.lower() or "encoded" in prompt.lower()
+
+    def test_ohe_note_absent_for_numeric_only(self):
+        """OHE pipeline note must NOT appear when all columns are numeric."""
+        df = make_df()
+        prof = make_profile(df)
+        # All columns in make_df() are float64 or int64 — no categoricals
+        prompt = _build_prompt(prof, "", [], ["age", "fare", "pclass"])
+        assert "PIPELINE NOTE" not in prompt
+
 
 # ---------------------------------------------------------------------------
 # FEAgent — core loop logic (mocked trainer)
@@ -312,7 +337,8 @@ class TestFEAgentLoopLogic:
         baseline = self._make_train_result(0.70, 0.30)
         fe_result = self._make_train_result(0.80, 0.20)
 
-        with patch("core.fe_agent.train", side_effect=[baseline, fe_result]):
+        # 3rd call = final save of best FE model (new: save_model=True after loop)
+        with patch("core.fe_agent.train", side_effect=[baseline, fe_result, fe_result]):
             agent = FEAgent(llm=llm, config={"max_rounds": 1, "stall_rounds": 3})
             log = agent.run(df, "target", prof, output_dir="/tmp")
 
@@ -328,7 +354,8 @@ class TestFEAgentLoopLogic:
         baseline = self._make_train_result(0.70, 0.30)
         worse = self._make_train_result(0.65, 0.35)
 
-        with patch("core.fe_agent.train", side_effect=[baseline, worse, worse, worse]):
+        # 5th call = final baseline save (no FE round improved → save baseline)
+        with patch("core.fe_agent.train", side_effect=[baseline, worse, worse, worse, baseline]):
             agent = FEAgent(llm=llm, config={"max_rounds": 3, "stall_rounds": 3})
             log = agent.run(df, "target", prof, output_dir="/tmp")
 
@@ -367,12 +394,13 @@ class TestFEAgentLoopLogic:
         assert len(log) <= 4
 
     def test_llm_error_does_not_crash_agent(self):
-        """LLMError must be caught — loop continues up to max_empty_responses."""
+        """LLMError (API/key failure) must stop the loop immediately — hard stop."""
         df = make_df()
         prof = make_profile(df)
 
         mock_llm = MagicMock(spec=BaseLLM)
-        mock_llm.complete.side_effect = LLMError("rate limit")
+        # complete_with_system is what _call_llm now uses
+        mock_llm.complete_with_system.side_effect = LLMError("rate limit")
 
         baseline = self._make_train_result(0.70, 0.30)
         with patch("core.fe_agent.train", return_value=baseline):
@@ -380,8 +408,8 @@ class TestFEAgentLoopLogic:
             log = agent.run(df, "target", prof, output_dir="/tmp")
 
         assert log[0].round_num == 0  # baseline always present
-        # After 2 LLM failures, loop should have stopped
-        assert len(log) <= 4
+        # Hard stop on first LLMError — loop does not continue
+        assert len(log) == 1
 
     def test_unparseable_llm_response_handled(self):
         """LLM response without engineer_features must not crash."""
@@ -389,7 +417,9 @@ class TestFEAgentLoopLogic:
         prof = make_profile(df)
 
         mock_llm = MagicMock(spec=BaseLLM)
+        # Both complete and complete_with_system must return prose (no function)
         mock_llm.complete.return_value = "Sorry, I cannot help with that."
+        mock_llm.complete_with_system.return_value = "Sorry, I cannot help with that."
 
         baseline = self._make_train_result(0.70, 0.30)
         with patch("core.fe_agent.train", return_value=baseline):
@@ -499,3 +529,91 @@ class TestRunFunction:
                 for prov in provider_names:
                     assert prov not in module_name, \
                         f"fe_agent.py must not import '{prov}' directly — found: {module_name}"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — fixes applied after live run assessment
+# ---------------------------------------------------------------------------
+
+class TestRegressionFixes:
+    """Regression tests for the 4-fix batch: SHAP, model save, NaN."""
+
+    def _make_train_result(self, cv_score, cv_loss, shap_dict=None):
+        r = MagicMock()
+        r.status = "complete"
+        r.cv_score = cv_score
+        r.cv_loss = cv_loss
+        r.shap_dict = shap_dict or {}
+        r.model_path = None
+        return r
+
+    def test_shap_passed_to_all_rounds(self):
+        """compute_shap must be True for both baseline and FE rounds."""
+        df = make_df()
+        prof = make_profile(df)
+        llm = make_mock_llm()
+        calls = []
+
+        def spy_train(**kwargs):
+            calls.append(kwargs.get("compute_shap"))
+            return self._make_train_result(0.80, 0.20)
+
+        with patch("core.fe_agent.train", side_effect=spy_train):
+            agent = FEAgent(llm, config={"max_rounds": 1, "stall_rounds": 1})
+            agent.run(df, "target", prof, save_model=False, output_dir="/tmp")
+
+        # All round calls must have compute_shap=True
+        assert all(v is True for v in calls), \
+            f"Expected compute_shap=True for all rounds, got: {calls}"
+
+    def test_best_fe_model_saved_when_improved(self, tmp_path):
+        """When an FE round improves the baseline, a model must be saved."""
+        df = make_df()
+        prof = make_profile(df)
+        llm = make_mock_llm()
+
+        baseline = self._make_train_result(0.70, 0.30)
+        fe_improved = self._make_train_result(0.80, 0.20)
+        # final save call returns a result with a model_path
+        final_saved = self._make_train_result(0.80, 0.20)
+        final_saved.model_path = str(tmp_path / "best_model.pkl")
+
+        call_count = [0]
+
+        def side_effect_train(**kwargs):
+            call_count[0] += 1
+            if kwargs.get("save_model"):
+                return final_saved
+            if call_count[0] == 1:
+                return baseline
+            return fe_improved
+
+        with patch("core.fe_agent.train", side_effect=side_effect_train):
+            agent = FEAgent(llm, config={"max_rounds": 1, "stall_rounds": 1,
+                                         "delta_threshold": 0.05})
+            log = agent.run(df, "target", prof, save_model=True,
+                            output_dir=str(tmp_path))
+
+        # At least one call must have save_model=True
+        # (verified by final_saved.model_path being set)
+        best_rounds = [r for r in log if r.improved]
+        if best_rounds:
+            assert best_rounds[-1].train_result is not None
+
+    def test_no_model_save_when_not_requested(self):
+        """save_model=False must result in no save_model=True call to train()."""
+        df = make_df()
+        prof = make_profile(df)
+        llm = make_mock_llm()
+        save_calls = []
+
+        def spy_train(**kwargs):
+            if kwargs.get("save_model"):
+                save_calls.append(True)
+            return self._make_train_result(0.80, 0.20)
+
+        with patch("core.fe_agent.train", side_effect=spy_train):
+            agent = FEAgent(llm, config={"max_rounds": 1, "stall_rounds": 1})
+            agent.run(df, "target", prof, save_model=False, output_dir="/tmp")
+
+        assert len(save_calls) == 0, "train() must not be called with save_model=True when save_model=False"

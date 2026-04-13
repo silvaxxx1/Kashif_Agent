@@ -69,14 +69,25 @@ class AnthropicLLM(BaseLLM):
 
     def complete(self, prompt: str) -> str:
         """Send *prompt* to Anthropic and return the response text."""
+        return self._chat(system=None, user=prompt)
+
+    def complete_with_system(self, system: str, user: str) -> str:
+        """Send a system + user message pair — uses Anthropic's native system param."""
+        return self._chat(system=system, user=user)
+
+    def _chat(self, system, user: str) -> str:
+        """Internal: call the Anthropic messages endpoint."""
         client = self._get_client()
         try:
-            message = client.messages.create(
+            kwargs = dict(
                 model=self.model,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": user}],
             )
+            if system:
+                kwargs["system"] = system
+            message = client.messages.create(**kwargs)
             if not message.content:
                 raise LLMError("Anthropic returned an empty content list.")
             block = message.content[0]

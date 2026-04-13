@@ -1,5 +1,7 @@
 # data/
 
+> Local input datasets for Kashif runs and smoke tests.
+
 Place your input CSV files here before running Kashif.
 
 The `.csv` files in this directory are gitignored — do not commit raw data.

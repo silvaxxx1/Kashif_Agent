@@ -19,13 +19,17 @@ training:
   model_selection:
     models:
       classification:
+        - XGBoost
+        - LightGBM
         - Random Forest
         - Logistic Regression
-        - Decision Tree
+        - Gradient Boosting
       regression:
+        - XGBoost
+        - LightGBM
         - Random Forest
         - Ridge
-        - Decision Tree
+        - Gradient Boosting
   cleaning:
     cardinality:
       max_unique_share: 0.9

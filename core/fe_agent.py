@@ -134,9 +134,16 @@ def _build_prompt(
     experiment_log: List[RoundResult],
     surviving_cols: List[str],
 ) -> str:
-    """Assemble the full LLM prompt for round N."""
+    """
+    Assemble the user-portion of the LLM prompt for round N.
 
-    parts: List[str] = [_SYSTEM_PREAMBLE, ""]
+    The system preamble (_SYSTEM_PREAMBLE) is sent separately via
+    complete_with_system() so providers that support a system role
+    (Groq, Anthropic) enforce the rules at the API level rather than
+    relying on the model to follow instructions buried in a user message.
+    """
+
+    parts: List[str] = [""]
 
     # --- Dataset schema ---
     parts.append("=== DATASET SCHEMA (post-cleaning columns available to you) ===")
@@ -170,6 +177,34 @@ def _build_prompt(
                     top = stats.get("top_values", {})
                     top_str = ", ".join(f"{k}({v})" for k, v in list(top.items())[:3]) if top else "?"
                     parts.append(f"  {col}: {dtype}, top=[{top_str}], null_rate={null_rate:.2%}")
+        parts.append("")
+
+    # --- Pipeline OHE note ---
+    # AutoDFColumnTransformer OHE-encodes all categorical columns downstream.
+    # Tell the LLM which columns will be encoded (and what names they produce)
+    # so it does NOT create duplicate one-hot columns manually.
+    cat_cols = [
+        col for col in surviving_cols
+        if col in col_stats and col_stats[col].get("dtype") in ("object", "category", "string", "bool")
+    ]
+    if cat_cols:
+        parts.append("=== PIPELINE NOTE (read carefully) ===")
+        parts.append(
+            "After your function returns, the pipeline automatically one-hot-encodes "
+            "every categorical (object/string) column. Do NOT manually create binary "
+            "or one-hot columns for the following — they will already exist:"
+        )
+        for col in cat_cols:
+            top = col_stats[col].get("top_values", {})
+            if top:
+                encoded = [f"{col}_{v}" for v in list(top.keys())[:6]]
+                parts.append(f"  '{col}' → {', '.join(encoded)}")
+            else:
+                parts.append(f"  '{col}' will be one-hot-encoded automatically")
+        parts.append(
+            "Instead, engineer higher-order features FROM the raw categorical values "
+            "(e.g., groupby aggregates, interaction terms with numeric columns)."
+        )
         parts.append("")
 
     # --- User directive ---
@@ -351,14 +386,19 @@ class FEAgent:
                 surviving_cols=surviving_cols,
             )
 
-            # Call LLM
-            fe_code = self._call_llm(prompt)
+            # Call LLM — Fix A: LLMError (API/key) is a hard stop; None = parse failure
+            try:
+                fe_code = self._call_llm(prompt)
+            except LLMError as e:
+                logger.error("FEAgent round %d: LLM API error — stopping loop: %s", round_num, e)
+                break  # hard stop — no point retrying auth/rate-limit errors
+
             if fe_code is None:
                 empty_count += 1
-                logger.warning("FEAgent round %d: LLM returned unparseable response (%d/%d)",
+                logger.warning("FEAgent round %d: LLM output unparseable after retry (%d/%d)",
                                round_num, empty_count, self.max_empty_responses)
                 if empty_count >= self.max_empty_responses:
-                    logger.info("FEAgent: too many empty LLM responses — stopping")
+                    logger.info("FEAgent: too many unparseable responses — stopping")
                     break
                 # Log a no-op round so the LLM sees its own failure in next prompt
                 experiment_log.append(RoundResult(
@@ -368,7 +408,7 @@ class FEAgent:
                     cv_loss=experiment_log[-1].cv_loss,
                     delta=0.0,
                     improved=False,
-                    executor_error="LLM returned unparseable response",
+                    executor_error="LLM output unparseable after retry",
                     shap_top=[],
                     shap_dead=[],
                     train_result=None,
@@ -402,20 +442,91 @@ class FEAgent:
                     logger.info("FEAgent: %d consecutive stall rounds — stopping", self.stall_rounds)
                     break
 
+        # ── Save the best model (baseline or best FE round) ──────────
+        if save_model:
+            best_fe_round = max(
+                (r for r in experiment_log if r.improved and r.fe_code is not None),
+                key=lambda r: r.cv_score,
+                default=None,
+            )
+            if best_fe_round is not None:
+                # An FE round improved — re-fit and save that model
+                logger.info("FEAgent: saving best FE model from round %d", best_fe_round.round_num)
+                best_fe_step = FETransformer(best_fe_round.fe_code)
+                final_result = train(
+                    df=df,
+                    target_col=target_col,
+                    task_type=task_type,
+                    fe_step=best_fe_step,
+                    config=train_config,
+                    save_model=True,
+                    output_dir=output_dir,
+                    compute_shap=True,
+                )
+                best_fe_round.train_result = final_result
+            else:
+                # Baseline was best — save baseline model
+                logger.info("FEAgent: saving baseline model (no FE improvement)")
+                baseline_result = train(
+                    df=df,
+                    target_col=target_col,
+                    task_type=task_type,
+                    fe_step=None,
+                    config=train_config,
+                    save_model=True,
+                    output_dir=output_dir,
+                    compute_shap=True,
+                )
+                experiment_log[0].train_result = baseline_result
+
         return experiment_log
 
     # ------------------------------------------------------------------
-    def _call_llm(self, prompt: str) -> Optional[str]:
-        """Call LLM and extract fe_code. Returns None on failure."""
-        try:
-            raw = self.llm.complete(prompt)
-        except LLMError as e:
-            logger.error("FEAgent LLM call failed: %s", e)
-            return None
+    def _call_llm(self, user_prompt: str) -> Optional[str]:
+        """
+        Call LLM via system/user split and extract fe_code.
 
+        Fix A: LLMError (API/key failures) propagates to the caller — the loop
+               catches it and stops immediately. Only parse failures return None.
+
+        Fix B: On first parse failure, retry once with a strict structural reminder
+               before counting the round as empty.
+
+        Fix C: Rules are sent as the system message; data+task as the user message.
+               Providers that support a native system role enforce it at the API
+               level, which is far more reliable than embedding rules in the user
+               turn for chat-tuned models.
+
+        Raises
+        ------
+        LLMError
+            Re-raised from the provider on API/auth/rate-limit failure.
+            Caller must catch this and stop the loop — do not retry API errors.
+        """
+        # First attempt — system/user split (Fix C)
+        raw = self.llm.complete_with_system(system=_SYSTEM_PREAMBLE, user=user_prompt)
+        code = _extract_code(raw)
+
+        if code is not None:
+            return code
+
+        # Parse failed — one retry with an explicit structural reminder (Fix B)
+        logger.warning("FEAgent: parse failed on first attempt — retrying with strict reminder")
+        retry_suffix = (
+            "\n\nYour previous response did not contain a valid Python function. "
+            "Return ONLY the following structure — no explanation, no markdown:\n\n"
+            "def engineer_features(df):\n"
+            "    df = df.copy()\n"
+            "    # your new features here\n"
+            "    return df"
+        )
+        raw = self.llm.complete_with_system(
+            system=_SYSTEM_PREAMBLE,
+            user=user_prompt + retry_suffix,
+        )
         code = _extract_code(raw)
         if code is None:
-            logger.warning("FEAgent: LLM output contained no engineer_features definition")
+            logger.warning("FEAgent: parse failed after retry — counting as empty response")
         return code
 
     # ------------------------------------------------------------------
@@ -450,9 +561,9 @@ class FEAgent:
             task_type=task_type,
             fe_step=fe_step,
             config=train_config,
-            save_model=save_model and fe_code is None,  # only save baseline model automatically
+            save_model=False,  # explicit final save after loop selects best round
             output_dir=output_dir,
-            compute_shap=(fe_code is None),  # SHAP only for baseline to save time
+            compute_shap=True,  # SHAP every round — feeds LLM reflection
         )
 
         delta = prev_loss - result.cv_loss   # positive = improvement (lower loss is better)

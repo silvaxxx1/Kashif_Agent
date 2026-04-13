@@ -325,6 +325,147 @@ class TestAnthropicLLM:
 
 
 # ---------------------------------------------------------------------------
+# complete_with_system — regression tests for Fix C
+# ---------------------------------------------------------------------------
+
+class TestCompleteWithSystem:
+    """Verify system/user split is wired correctly in both providers."""
+
+    def _mock_groq(self, monkeypatch, response_text: str) -> GroqLLM:
+        monkeypatch.setenv("GROQ_API_KEY", "fake-key")
+        mock_message = MagicMock()
+        mock_message.content = response_text
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        llm = GroqLLM()
+        llm._client = mock_client
+        return llm
+
+    def _mock_anthropic(self, monkeypatch, response_text: str) -> AnthropicLLM:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+        mock_block = MagicMock()
+        mock_block.text = response_text
+        mock_response = MagicMock()
+        mock_response.content = [mock_block]
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = mock_response
+        llm = AnthropicLLM()
+        llm._client = mock_client
+        return llm
+
+    def test_groq_complete_with_system_returns_string(self, monkeypatch):
+        llm = self._mock_groq(monkeypatch, "def engineer_features(df): return df")
+        result = llm.complete_with_system("you are an expert", "write code")
+        assert isinstance(result, str)
+        assert "engineer_features" in result
+
+    def test_groq_complete_with_system_sends_two_messages(self, monkeypatch):
+        """System role must be a separate message, not concatenated into user."""
+        llm = self._mock_groq(monkeypatch, "response")
+        llm.complete_with_system(system="system instructions", user="user task")
+        call_kwargs = llm._client.chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert messages[0]["content"] == "system instructions"
+        assert messages[1]["content"] == "user task"
+
+    def test_groq_complete_single_message_still_works(self, monkeypatch):
+        """complete() (single user message) must still function after refactor."""
+        llm = self._mock_groq(monkeypatch, "response")
+        llm.complete("just a user prompt")
+        call_kwargs = llm._client.chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+
+    def test_anthropic_complete_with_system_sends_system_param(self, monkeypatch):
+        """Anthropic system must be sent via the system= kwarg, not in messages."""
+        llm = self._mock_anthropic(monkeypatch, "response")
+        llm.complete_with_system(system="rules", user="task")
+        call_kwargs = llm._client.messages.create.call_args.kwargs
+        assert call_kwargs.get("system") == "rules"
+        assert call_kwargs["messages"] == [{"role": "user", "content": "task"}]
+
+    def test_anthropic_complete_without_system_omits_system_param(self, monkeypatch):
+        """complete() must not pass system= to Anthropic (avoids empty-string errors)."""
+        llm = self._mock_anthropic(monkeypatch, "response")
+        llm.complete("prompt only")
+        call_kwargs = llm._client.messages.create.call_args.kwargs
+        assert "system" not in call_kwargs
+
+    def test_base_llm_default_concatenates(self):
+        """BaseLLM default complete_with_system falls back to concatenation."""
+        class DummyLLM(BaseLLM):
+            def complete(self, prompt: str) -> str:
+                return f"received: {prompt}"
+
+        llm = DummyLLM(model="dummy")
+        result = llm.complete_with_system("SYSTEM", "USER")
+        assert "SYSTEM" in result
+        assert "USER" in result
+
+
+# ---------------------------------------------------------------------------
+# _call_llm retry and hard-stop — regression tests for Fix A + B
+# ---------------------------------------------------------------------------
+
+class TestCallLLMRetry:
+    """Verify Fix A (hard stop on LLMError) and Fix B (retry on parse failure)."""
+
+    def _make_agent(self, llm):
+        from core.fe_agent import FEAgent
+        return FEAgent(llm, config={"max_rounds": 1, "stall_rounds": 1})
+
+    def test_llm_error_propagates_from_call_llm(self):
+        """LLMError from the provider must propagate out of _call_llm."""
+        from core.fe_agent import FEAgent
+        from core.llm.base import LLMError
+
+        mock = MagicMock(spec=BaseLLM)
+        mock.complete_with_system.side_effect = LLMError("auth failed")
+        agent = FEAgent(mock, config={})
+        with pytest.raises(LLMError):
+            agent._call_llm("some prompt")
+
+    def test_parse_failure_returns_none_not_raises(self):
+        """Parse failure (no def engineer_features) must return None, not raise."""
+        from core.fe_agent import FEAgent
+
+        mock = MagicMock(spec=BaseLLM)
+        mock.complete_with_system.return_value = "sorry I cannot help"
+        agent = FEAgent(mock, config={})
+        result = agent._call_llm("prompt")
+        assert result is None
+
+    def test_retry_called_on_parse_failure(self):
+        """complete_with_system must be called twice when first response is unparseable."""
+        from core.fe_agent import FEAgent
+
+        mock = MagicMock(spec=BaseLLM)
+        mock.complete_with_system.return_value = "not a function"
+        agent = FEAgent(mock, config={})
+        agent._call_llm("prompt")
+        assert mock.complete_with_system.call_count == 2
+
+    def test_no_retry_when_first_parse_succeeds(self):
+        """If first response parses correctly, only one API call is made."""
+        from core.fe_agent import FEAgent
+
+        mock = MagicMock(spec=BaseLLM)
+        mock.complete_with_system.return_value = "def engineer_features(df):\n    return df"
+        agent = FEAgent(mock, config={})
+        result = agent._call_llm("prompt")
+        assert result is not None
+        assert mock.complete_with_system.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # Cross-provider: both satisfy BaseLLM contract identically
 # ---------------------------------------------------------------------------
 

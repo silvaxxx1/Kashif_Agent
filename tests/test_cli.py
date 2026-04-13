@@ -350,3 +350,57 @@ class TestInfoCommand:
         cfg_file.write_text("llm:\n  provider: groq\n")
         result = runner.invoke(app, ["info", "--config", str(cfg_file)])
         assert "groq" in result.output
+
+
+# ---------------------------------------------------------------------------
+# _sanitize and _build_output — NaN / Inf regression tests
+# ---------------------------------------------------------------------------
+
+class TestBuildOutputSanitize:
+    """Regression tests: json.dumps must never emit NaN or Infinity."""
+
+    def _make_round(self, round_num, cv_score, cv_loss, delta, improved=False):
+        from core.fe_agent import RoundResult
+        r = MagicMock(spec=RoundResult)
+        r.round_num = round_num
+        r.cv_score = cv_score
+        r.cv_loss = cv_loss
+        r.delta = delta
+        r.improved = improved
+        r.fe_code = None
+        r.executor_error = None
+        r.shap_top = []
+        r.shap_dead = []
+        r.train_result = None
+        return r
+
+    def test_build_output_no_nan_in_json(self):
+        """NaN scores must not appear in json.dumps output (invalid JSON spec)."""
+        log = [self._make_round(0, float("nan"), float("inf"), 0.0)]
+        from cli.main import _build_output
+        output = _build_output(log, {"task_type": "classification"}, None, "/tmp")
+        # Verify json.dumps does not raise and produces valid JSON
+        serialised = json.dumps(output)
+        parsed = json.loads(serialised)
+        # NaN/inf fields should be None, not NaN
+        assert parsed["cv_score"] is None or isinstance(parsed["cv_score"], (int, float))
+        assert "NaN" not in serialised
+        assert "Infinity" not in serialised
+
+    def test_build_output_inf_score_becomes_none(self):
+        """Infinity in cv_score must serialize as null."""
+        log = [self._make_round(0, float("inf"), float("inf"), 0.0)]
+        from cli.main import _build_output
+        output = _build_output(log, {"task_type": "classification"}, None, "/tmp")
+        serialised = json.dumps(output)
+        assert "Infinity" not in serialised
+        parsed = json.loads(serialised)
+        assert parsed["cv_score"] is None
+
+    def test_build_output_normal_scores_preserved(self):
+        """Valid float scores must survive sanitization unchanged."""
+        log = [self._make_round(0, 0.85, 0.15, 0.0)]
+        from cli.main import _build_output
+        output = _build_output(log, {"task_type": "classification"}, None, "/tmp")
+        assert output["cv_score"] == round(0.85, 4)
+        assert output["baseline_score"] == round(0.85, 4)
