@@ -4,9 +4,10 @@
 llm:
   provider: groq                      # groq | anthropic | ollama
   model: llama-3.3-70b-versatile      # model ID for the chosen provider
-  api_key_env: GROQ_API_KEY           # env var name — NOT the key itself
+  api_key_env: GROQ_API_KEY           # env var name — NOT the key itself (not used for ollama)
   temperature: 0.2
   max_tokens: 4096
+  # base_url: http://localhost:11434/v1  # ollama only — override for remote deployments
 
 fe_agent:
   max_rounds: 10

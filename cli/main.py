@@ -24,6 +24,8 @@ import json
 import logging
 import os
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -41,6 +43,15 @@ app = typer.Typer(
 # ---------------------------------------------------------------------------
 
 _DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+
+
+def _make_run_dir(base: str) -> str:
+    """Create a timestamped subdirectory under *base* for this run's artifacts."""
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    run_id = f"{ts}_{uuid.uuid4().hex[:6]}"
+    run_dir = os.path.join(base, run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
 
 
 def _load_config(config_path: Path) -> dict:
@@ -84,8 +95,17 @@ def _resolve_llm(provider: str, cfg: dict):
             max_tokens=max_tokens,
             api_key_env=api_key_env or "ANTHROPIC_API_KEY",
         )
+    elif provider == "ollama":
+        from core.llm.ollama import OllamaLLM
+        base_url = llm_cfg.get("base_url", "http://localhost:11434/v1")
+        return OllamaLLM(
+            model=model or "llama3.2",
+            base_url=base_url,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
     else:
-        typer.echo(f"[kashif] Unknown provider '{provider}'. Choose: groq | anthropic", err=True)
+        typer.echo(f"[kashif] Unknown provider '{provider}'. Choose: groq | anthropic | ollama", err=True)
         raise typer.Exit(code=1)
 
 
@@ -184,6 +204,10 @@ def run(
     program_md_path = config_path.parent / "program.md"
     program_md = _load_program_md(program_md_path)
 
+    # Create isolated run directory
+    run_dir = _make_run_dir(output_dir)
+    typer.echo(f"[kashif] Run directory: {run_dir}", err=True)
+
     # Validate CSV
     if not csv.exists():
         typer.echo(f"[kashif] CSV not found: {csv}", err=True)
@@ -210,7 +234,7 @@ def run(
     from core.profiler import run as profiler_run
     profile_json, eda_path = profiler_run(
         df, target,
-        output_dir=output_dir,
+        output_dir=run_dir,
         save_eda=not no_eda,
     )
     typer.echo(
@@ -241,7 +265,7 @@ def run(
             task_type=profile_json.get("task_type"),
             config=train_cfg,
             save_model=True,
-            output_dir=output_dir,
+            output_dir=run_dir,
         )
         # Wrap single result into a minimal experiment log
         from core.fe_agent import RoundResult
@@ -274,14 +298,14 @@ def run(
             program_md=program_md,
             config=fe_cfg,
             train_config=train_cfg,
-            output_dir=output_dir,
+            output_dir=run_dir,
         )
 
     # Report
     typer.echo("[kashif] Generating report ...", err=True)
     from core.reporter import run as reporter_run
     report_md, report_path = reporter_run(
-        log, profile_json, output_dir=output_dir, save_report=True
+        log, profile_json, output_dir=run_dir, save_report=True
     )
     if report_path:
         typer.echo(f"[kashif] Report: {report_path}", err=True)
@@ -304,7 +328,7 @@ def run(
             typer.echo(f"[kashif] Narration skipped: {e}", err=True)
 
     # Build and print JSON output
-    output = _build_output(log, profile_json, report_path, output_dir)
+    output = _build_output(log, profile_json, report_path, run_dir)
     if narration:
         output["narration"] = narration
     typer.echo(json.dumps(output, indent=2))

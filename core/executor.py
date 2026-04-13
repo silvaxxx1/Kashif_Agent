@@ -25,6 +25,7 @@ import math
 import re
 import signal
 import textwrap
+import threading
 import traceback
 from typing import Optional, Tuple
 
@@ -89,7 +90,13 @@ _SAFE_GLOBALS: dict = {
 
 
 # ---------------------------------------------------------------------------
-# Timeout helpers (SIGALRM — Linux/macOS only; graceful fallback on Windows)
+# Timeout helpers
+#
+# Two strategies:
+#   - SIGALRM (Linux/macOS, main thread only) — preferred, zero overhead
+#   - threading.Thread join (fallback) — works from any thread (e.g. FastAPI
+#     thread pool), but cannot forcibly kill a hung thread; the thread runs
+#     to completion as a daemon after the timeout is declared.
 # ---------------------------------------------------------------------------
 
 class _TimeoutError(Exception):
@@ -101,7 +108,41 @@ def _alarm_handler(signum, frame):  # noqa: ANN001
 
 
 def _supports_sigalrm() -> bool:
-    return hasattr(signal, "SIGALRM")
+    """SIGALRM is available AND we are on the main thread."""
+    return (
+        hasattr(signal, "SIGALRM")
+        and threading.current_thread() is threading.main_thread()
+    )
+
+
+def _run_with_thread_timeout(
+    fn,
+    df_in: "pd.DataFrame",
+    timeout: int,
+) -> "Tuple[Optional[pd.DataFrame], Optional[str]]":
+    """
+    Run fn(df_in) in a daemon thread with a join-based timeout.
+
+    Used when SIGALRM is unavailable (Windows) or when called from a
+    non-main thread (e.g. FastAPI thread-pool workers).
+    """
+    result_holder: list = [None]
+    error_holder: list = [None]
+
+    def _target():
+        try:
+            result_holder[0] = fn(df_in)
+        except Exception:
+            error_holder[0] = f"RuntimeError:\n{traceback.format_exc()}"
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout)
+
+    if t.is_alive():
+        return None, f"TimeoutError: fe_code exceeded {timeout}s wall-clock limit."
+
+    return result_holder[0], error_holder[0]
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +209,9 @@ def execute(
 
     # ------------------------------------------------------------------
     # Step 4 — call with a copy; enforce timeout
+    #
+    # Use SIGALRM when on the main thread (CLI path), thread-join timeout
+    # when called from a worker thread (FastAPI path).
     # ------------------------------------------------------------------
     df_in = df.copy()
     result: Optional[pd.DataFrame] = None
@@ -176,17 +220,17 @@ def execute(
     if _supports_sigalrm():
         old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
         signal.alarm(timeout)
-
-    try:
-        result = fn(df_in)
-    except _TimeoutError:
-        error = f"TimeoutError: fe_code exceeded {timeout}s wall-clock limit."
-    except Exception:
-        error = f"RuntimeError:\n{traceback.format_exc()}"
-    finally:
-        if _supports_sigalrm():
+        try:
+            result = fn(df_in)
+        except _TimeoutError:
+            error = f"TimeoutError: fe_code exceeded {timeout}s wall-clock limit."
+        except Exception:
+            error = f"RuntimeError:\n{traceback.format_exc()}"
+        finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
+    else:
+        result, error = _run_with_thread_timeout(fn, df_in, timeout)
 
     if error is not None:
         return None, error

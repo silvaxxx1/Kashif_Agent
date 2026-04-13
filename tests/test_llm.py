@@ -3,7 +3,7 @@ test_llm.py — Step 4d tests for core/llm/
 
 Strategy:
   - No real API calls — providers are tested with mocked SDK clients
-  - Covers: BaseLLM contract, GroqLLM, AnthropicLLM
+  - Covers: BaseLLM contract, GroqLLM, AnthropicLLM, OllamaLLM
     - lazy client init
     - missing API key raises LLMError
     - missing SDK package raises LLMError
@@ -20,6 +20,7 @@ import pytest
 from core.llm.base import BaseLLM, LLMError
 from core.llm.groq import GroqLLM
 from core.llm.anthropic import AnthropicLLM
+from core.llm.ollama import OllamaLLM
 
 
 # ---------------------------------------------------------------------------
@@ -565,3 +566,209 @@ class TestAnthropicLLMAuditFixes:
         llm._client = mock_client
         with pytest.raises(LLMError, match="unexpected content block"):
             llm.complete("prompt")
+
+
+# ---------------------------------------------------------------------------
+# OllamaLLM
+# ---------------------------------------------------------------------------
+
+class TestOllamaLLM:
+    def test_default_params(self):
+        llm = OllamaLLM()
+        assert llm.model == "llama3.2"
+        assert llm.base_url == "http://localhost:11434/v1"
+        assert llm.temperature == 0.2
+        assert llm.max_tokens == 4096
+
+    def test_custom_params(self):
+        llm = OllamaLLM(model="mistral", base_url="http://remote:11434/v1", temperature=0.5, max_tokens=1024)
+        assert llm.model == "mistral"
+        assert llm.base_url == "http://remote:11434/v1"
+        assert llm.temperature == 0.5
+        assert llm.max_tokens == 1024
+
+    def test_is_base_llm(self):
+        assert isinstance(OllamaLLM(), BaseLLM)
+
+    def test_client_is_lazy(self):
+        llm = OllamaLLM()
+        assert llm._client is None  # not created until first call
+
+    def test_missing_openai_package_raises_llm_error(self):
+        llm = OllamaLLM()
+        with patch("core.llm.ollama.OpenAI", None):
+            llm._client = None
+            with pytest.raises(LLMError, match="openai package"):
+                llm.complete("test")
+
+    def test_complete_returns_string(self):
+        mock_message = MagicMock()
+        mock_message.content = "def engineer_features(df): return df"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = OllamaLLM()
+        llm._client = mock_client
+
+        result = llm.complete("write feature engineering code")
+        assert isinstance(result, str)
+        assert "engineer_features" in result
+
+    def test_complete_calls_correct_model(self):
+        mock_message = MagicMock()
+        mock_message.content = "response"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = OllamaLLM(model="codellama", temperature=0.1, max_tokens=512)
+        llm._client = mock_client
+
+        llm.complete("prompt")
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["model"] == "codellama"
+        assert call_kwargs["temperature"] == 0.1
+        assert call_kwargs["max_tokens"] == 512
+
+    def test_complete_with_system_sends_two_messages(self):
+        mock_message = MagicMock()
+        mock_message.content = "response"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = OllamaLLM()
+        llm._client = mock_client
+
+        llm.complete_with_system(system="you are an expert", user="write code")
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert messages[0]["content"] == "you are an expert"
+        assert messages[1]["content"] == "write code"
+
+    def test_complete_single_message(self):
+        mock_message = MagicMock()
+        mock_message.content = "ok"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = OllamaLLM()
+        llm._client = mock_client
+
+        llm.complete("just a user prompt")
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+
+    def test_provider_error_wrapped_in_llm_error(self):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("connection refused")
+
+        llm = OllamaLLM()
+        llm._client = mock_client
+
+        with pytest.raises(LLMError, match="Ollama API error"):
+            llm.complete("test")
+
+    def test_empty_choices_raises_llm_error(self):
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = OllamaLLM()
+        llm._client = mock_client
+
+        with pytest.raises(LLMError, match="empty choices"):
+            llm.complete("prompt")
+
+    def test_none_content_returns_empty_string(self):
+        mock_message = MagicMock()
+        mock_message.content = None
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = OllamaLLM()
+        llm._client = mock_client
+
+        assert llm.complete("prompt") == ""
+
+    def test_client_cached_after_first_call(self):
+        mock_message = MagicMock()
+        mock_message.content = "ok"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("core.llm.ollama.OpenAI", return_value=mock_client) as mock_ctor:
+            llm = OllamaLLM()
+            llm.complete("first")
+            llm.complete("second")
+            assert mock_ctor.call_count == 1  # built only once
+
+    def test_client_uses_dummy_api_key(self):
+        """Ollama doesn't need a real key — adapter must pass a dummy, not raise."""
+        mock_message = MagicMock()
+        mock_message.content = "ok"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("core.llm.ollama.OpenAI", return_value=mock_client) as mock_ctor:
+            llm = OllamaLLM()
+            llm.complete("prompt")
+            call_kwargs = mock_ctor.call_args.kwargs
+            assert call_kwargs["api_key"] == "ollama"
+
+    def test_client_uses_configured_base_url(self):
+        mock_message = MagicMock()
+        mock_message.content = "ok"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("core.llm.ollama.OpenAI", return_value=mock_client) as mock_ctor:
+            llm = OllamaLLM(base_url="http://remote:11434/v1")
+            llm.complete("prompt")
+            call_kwargs = mock_ctor.call_args.kwargs
+            assert call_kwargs["base_url"] == "http://remote:11434/v1"
+
+    def test_repr_contains_base_url(self):
+        llm = OllamaLLM(model="mistral", base_url="http://localhost:11434/v1")
+        r = repr(llm)
+        assert "OllamaLLM" in r
+        assert "mistral" in r
+        assert "http://localhost:11434/v1" in r

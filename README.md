@@ -73,8 +73,13 @@ core/
     base.py
     groq.py
     anthropic.py
+    ollama.py
 cli/
   main.py
+api/
+  server.py      FastAPI — POST /run, POST /run/stream, GET /health, GET /providers
+ui/
+  app.py         Streamlit UI with streaming progress, EDA, and results
 ```
 
 The repository also contains output reports under `outputs/` and sample datasets under `data/` for local testing.
@@ -86,22 +91,55 @@ The repository also contains output reports under `outputs/` and sample datasets
 ```bash
 cd kashif_core
 uv sync
+```
 
+### CLI
+
+```bash
 # Static pipeline only
 uv run python -m cli.main run --csv data/titanic.csv --target survived --no-agent
 
-# Full loop with the configured provider
+# Full LLM feature engineering loop
 uv run python -m cli.main run --csv data/titanic.csv --target survived
 
 # Override provider and round count
 uv run python -m cli.main run --csv data/titanic.csv --target survived --llm anthropic --rounds 4
+
+# Local inference via Ollama (no API key required)
+uv run python -m cli.main run --csv data/titanic.csv --target survived --llm ollama
 ```
 
-Required environment variables depend on `config.yaml`. Typical examples:
+### FastAPI server
 
 ```bash
-export GROQ_API_KEY=...
-export ANTHROPIC_API_KEY=...
+uv run uvicorn api.server:app --reload --port 8000
+```
+
+Endpoints:
+- `GET  /health` — liveness check
+- `GET  /providers` — list available providers
+- `POST /run` — blocking pipeline run, returns JSON output contract
+- `POST /run/stream` — streaming NDJSON progress events, then final result
+
+### Streamlit UI
+
+```bash
+uv run streamlit run ui/app.py
+```
+
+Upload a CSV, pick a target column and provider, and watch the pipeline run in real time with a progress bar. The UI shows EDA (distributions, correlations, missing values), SHAP feature importance, AI narration, and download buttons for model and report artifacts.
+
+### LLM providers
+
+| Provider | Env var | Notes |
+|---|---|---|
+| `groq` | `GROQ_API_KEY` | Default — fastest, recommended |
+| `anthropic` | `ANTHROPIC_API_KEY` | Claude models |
+| `ollama` | *(none)* | Local — requires `ollama serve` |
+
+```bash
+export GROQ_API_KEY=gsk_...
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ---
